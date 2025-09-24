@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import os
-from collections import Counter
 from datetime import datetime
 from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
@@ -303,73 +302,143 @@ def align_datasets(fx_df: pd.DataFrame, cpi_df: pd.DataFrame) -> Tuple[pd.DataFr
     return fx_aligned, cpi_aligned
 
 
-def calculate_real_values(
-    fx_df: pd.DataFrame,
-    cpi_df: pd.DataFrame,
-    pairs: Sequence[str],
-    base_amount: float,
-) -> pd.DataFrame:
-    """Compute the inflation-adjusted USD value for each currency in every pair."""
+def resample_monthly(
+    fx_df: pd.DataFrame, cpi_df: pd.DataFrame
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Convert the aligned daily data to month-end frequency."""
 
     if not fx_df.index.equals(cpi_df.index):
         raise ValueError("Chỉ số thời gian của dữ liệu tỷ giá và CPI không khớp.")
 
-    results = pd.DataFrame(index=fx_df.index)
+    fx_monthly = fx_df.resample("M").last()
+    cpi_monthly = cpi_df.resample("M").last()
+    return fx_monthly, cpi_monthly
+
+
+def build_inflation_report(
+    fx_monthly: pd.DataFrame,
+    cpi_monthly: pd.DataFrame,
+    pairs: Sequence[str],
+    base_amount: float,
+) -> pd.DataFrame:
+    """Assemble a detailed month-by-month inflation comparison for every pair."""
+
+    records: List[Dict[str, float | str | datetime]] = []
+
     for pair in pairs:
         code_a, code_b = pair.split("-")
 
-        daily_rate_a_usd = fx_df[code_a]
-        daily_rate_b_usd = fx_df[code_b]
+        fx_a_usd = fx_monthly[code_a]
+        fx_b_usd = fx_monthly[code_b]
+        fx_a_to_b = fx_a_usd / fx_b_usd
 
-        start_rate_a_usd = daily_rate_a_usd.iloc[0]
-        start_rate_b_usd = daily_rate_b_usd.iloc[0]
-        start_rate_a_b = start_rate_a_usd / start_rate_b_usd
-        initial_amount_b = base_amount * start_rate_a_b
+        cpi_a = cpi_monthly[code_a]
+        cpi_b = cpi_monthly[code_b]
 
-        base_cpi_a = cpi_df[code_a].iloc[0]
-        base_cpi_b = cpi_df[code_b].iloc[0]
+        base_fx_ratio = fx_a_to_b.iloc[0]
+        base_cpi_a = cpi_a.iloc[0]
+        base_cpi_b = cpi_b.iloc[0]
 
-        real_value_a = base_amount / (cpi_df[code_a] / base_cpi_a)
-        real_value_b = initial_amount_b / (cpi_df[code_b] / base_cpi_b)
+        initial_amount_b = base_amount * base_fx_ratio
 
-        results[f"{pair}:{code_a}"] = real_value_a * daily_rate_a_usd
-        results[f"{pair}:{code_b}"] = real_value_b * daily_rate_b_usd
+        inflation_index_a = cpi_a / base_cpi_a
+        inflation_index_b = cpi_b / base_cpi_b
 
-    return results
+        inflation_pct_a = (inflation_index_a - 1.0) * 100.0
+        inflation_pct_b = (inflation_index_b - 1.0) * 100.0
+        inflation_diff = inflation_pct_a - inflation_pct_b
+
+        yoy_a = cpi_a.pct_change(periods=12) * 100.0
+        yoy_b = cpi_b.pct_change(periods=12) * 100.0
+
+        real_value_a_usd = (base_amount / inflation_index_a) * fx_a_usd
+        real_value_b_usd = (initial_amount_b / inflation_index_b) * fx_b_usd
+        purchasing_power_ratio = real_value_a_usd / real_value_b_usd
+
+        for timestamp in fx_monthly.index:
+            records.append(
+                {
+                    "Pair": pair,
+                    "Month": timestamp,
+                    "Currency A": code_a,
+                    "Currency B": code_b,
+                    "Inflation Index A": inflation_index_a.loc[timestamp],
+                    "Inflation Index B": inflation_index_b.loc[timestamp],
+                    "Inflation Change A (%)": inflation_pct_a.loc[timestamp],
+                    "Inflation Change B (%)": inflation_pct_b.loc[timestamp],
+                    "Inflation Difference (pp)": inflation_diff.loc[timestamp],
+                    "YoY Inflation A (%)": yoy_a.loc[timestamp],
+                    "YoY Inflation B (%)": yoy_b.loc[timestamp],
+                    "FX A/USD": fx_a_usd.loc[timestamp],
+                    "FX B/USD": fx_b_usd.loc[timestamp],
+                    "FX A/B": fx_a_to_b.loc[timestamp],
+                    "Real Value A (USD)": real_value_a_usd.loc[timestamp],
+                    "Real Value B (USD)": real_value_b_usd.loc[timestamp],
+                    "Purchasing Power Ratio": purchasing_power_ratio.loc[timestamp],
+                }
+            )
+
+    detail_df = pd.DataFrame.from_records(records)
+    detail_df.sort_values(["Pair", "Month"], inplace=True)
+    return detail_df
 
 
-def format_for_excel(results_df: pd.DataFrame, pairs: Sequence[str]) -> pd.DataFrame:
-    """Pivot the results into the Excel-friendly format requested by the user."""
+def create_summary(detail_df: pd.DataFrame) -> pd.DataFrame:
+    """Extract the latest month of metrics for each currency pair."""
 
-    monthly = results_df.resample("M").last()
-    monthly.index = monthly.index.to_period("M").to_timestamp()
+    if detail_df.empty:
+        return detail_df.copy()
 
-    pivoted = monthly.transpose()
-    pivoted.columns = [col.strftime("%Y-%m") for col in pivoted.columns]
-
-    currency_usage = Counter(code for pair in pairs for code in pair.split("-"))
-
-    names: List[str] = []
-    images: List[str] = []
-    for raw_name in pivoted.index:
-        pair, code = raw_name.split(":")
-        if currency_usage[code] > 1:
-            display_name = f"{code} ({pair})"
-        else:
-            display_name = code
-        names.append(display_name)
-        images.append("")
-
-    pivoted.insert(0, "Image", images)
-    pivoted.insert(0, "Name", names)
-
-    return pivoted
+    latest_rows = (
+        detail_df.sort_values(["Pair", "Month"])
+        .groupby("Pair", as_index=False)
+        .tail(1)
+        .reset_index(drop=True)
+    )
+    return latest_rows
 
 
-def save_to_excel(df: pd.DataFrame, filename: str) -> None:
-    """Persist the final dataframe to an Excel file."""
+def build_sources_table(
+    currencies: Sequence[str],
+    fx_sources: Mapping[str, str],
+    cpi_series: Mapping[str, str],
+) -> pd.DataFrame:
+    """Create a table describing the FX and CPI data sources for Excel output."""
 
-    df.to_excel(filename, index=False)
+    rows: List[Dict[str, str]] = []
+    for code in currencies:
+        rows.append(
+            {
+                "Currency": code,
+                "FX Source": fx_sources.get(code, "USD (1.0)"),
+                "CPI Series": cpi_series[code],
+            }
+        )
+    sources_df = pd.DataFrame(rows)
+    return sources_df.sort_values("Currency").reset_index(drop=True)
+
+
+def save_to_excel(
+    summary_df: pd.DataFrame,
+    detail_df: pd.DataFrame,
+    sources_df: pd.DataFrame,
+    filename: str,
+) -> None:
+    """Persist the comparison tables to an Excel workbook with multiple sheets."""
+
+    summary_out = summary_df.copy()
+    detail_out = detail_df.copy()
+
+    for df in (summary_out, detail_out):
+        if not df.empty:
+            df["Month"] = pd.to_datetime(df["Month"]).dt.strftime("%Y-%m")
+            numeric_cols = df.select_dtypes(include=["float", "int"]).columns
+            df[numeric_cols] = df[numeric_cols].round(4)
+
+    with pd.ExcelWriter(filename) as writer:
+        summary_out.to_excel(writer, sheet_name="Summary", index=False)
+        detail_out.to_excel(writer, sheet_name="Monthly Detail", index=False)
+        sources_df.to_excel(writer, sheet_name="Sources", index=False)
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +480,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     fx_df, fx_sources = download_fx_data(currencies, args.start, end_date)
     cpi_df, cpi_series = download_cpi_series(currencies, fred, args.start, cpi_overrides)
     fx_aligned, cpi_aligned = align_datasets(fx_df, cpi_df)
+    fx_monthly, cpi_monthly = resample_monthly(fx_aligned, cpi_aligned)
 
     print("Nguồn tỷ giá USD đã chọn:")
     for code in currencies:
@@ -428,12 +498,16 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     print("Hoàn tất tải dữ liệu. Bắt đầu tính toán...\n")
 
-    results = calculate_real_values(fx_aligned, cpi_aligned, pairs, args.amount)
-    formatted = format_for_excel(results, pairs)
+    detail_table = build_inflation_report(fx_monthly, cpi_monthly, pairs, args.amount)
+    summary_table = create_summary(detail_table)
+    sources_table = build_sources_table(currencies, fx_sources, cpi_series)
 
-    save_to_excel(formatted, args.output)
+    save_to_excel(summary_table, detail_table, sources_table, args.output)
 
     print(f"Đã lưu kết quả vào file '{args.output}'.")
+    print("  - Sheet 'Summary': Chỉ số mới nhất cho từng cặp tiền.")
+    print("  - Sheet 'Monthly Detail': Diễn biến theo từng tháng.")
+    print("  - Sheet 'Sources': Nguồn dữ liệu đã sử dụng.\n")
     print("--- HOÀN THÀNH ---\n")
 
 

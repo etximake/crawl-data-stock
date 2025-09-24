@@ -32,12 +32,14 @@ Nếu không truyền đối số, chương trình sẽ hỏi thông tin trực 
 
 ## Kết quả
 
-Script tạo file Excel với cấu trúc:
+Script tạo file Excel với ba sheet:
 
-| Name | Image | 2015-01 | 2015-02 | ... |
-|------|-------|---------|---------|-----|
-| GBP  |       | ...     | ...     | ... |
-| JPY  |       | ...     | ...     | ... |
-
-Trong đó mỗi dòng thể hiện sức mua tính theo USD (đã điều chỉnh lạm phát)
-cho số tiền ban đầu ở từng đồng tiền thuộc các cặp mà bạn cung cấp.
+1. **Summary** – tổng hợp tháng mới nhất cho mỗi cặp tiền, bao gồm:
+   - Chênh lệch lạm phát tính theo điểm phần trăm.
+   - Lạm phát tích lũy của từng đồng tiền kể từ thời điểm bắt đầu.
+   - Tỷ giá quy đổi giữa hai đồng tiền và so sánh sức mua thực tế (USD).
+2. **Monthly Detail** – bảng chi tiết diễn biến theo từng tháng với các
+   chỉ số: chỉ số giá CPI, % lạm phát tích lũy, % lạm phát theo năm (YoY),
+   tỷ giá A/B và sức mua thực (USD) cho mỗi đồng trong cặp.
+3. **Sources** – liệt kê mã ticker tỷ giá trên Yahoo Finance và mã series CPI
+   từ FRED đã được sử dụng cho từng đồng tiền.
