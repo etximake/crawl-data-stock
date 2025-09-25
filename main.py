@@ -49,6 +49,15 @@ DEFAULT_CURRENCY_DATABASE: Dict[str, Dict[str, str]] = {
         "fx_type": "inverse",
     },
 }
+
+# 4. Fallback cho mã CPI khi thiếu cấu hình chi tiết trong cơ sở dữ liệu.
+#    Điều này hữu ích khi người dùng thêm tiền tệ mới nhưng quên khai báo
+#    mã CPI hoặc vô tình xóa khỏi cấu hình mặc định.
+KNOWN_CPI_SERIES: Dict[str, str] = {
+    code: details["cpi_series"]
+    for code, details in DEFAULT_CURRENCY_DATABASE.items()
+    if details.get("cpi_series")
+}
 # --- KẾT THÚC CẤU HÌNH ---
 
 
@@ -169,10 +178,25 @@ def build_and_validate_job_list(pairs: List[str], db: Dict[str, Dict[str, str]])
         return None, None, None
 
     fx_tickers_needed = [db[c]["fx_ticker"] for c in unique_currencies if db[c]["fx_ticker"]]
+
+    # Bổ sung mã CPI bị thiếu bằng cơ sở tri thức mặc định nếu có.
+    missing_cpi = []
+    for code in unique_currencies:
+        if db[code].get("cpi_series"):
+            continue
+        if code in KNOWN_CPI_SERIES:
+            db[code]["cpi_series"] = KNOWN_CPI_SERIES[code]
+            print(
+                "   -> Tự động áp dụng mã CPI mặc định "
+                f"'{KNOWN_CPI_SERIES[code]}' cho {code}."
+            )
+        else:
+            missing_cpi.append(code)
+
     cpi_series_needed = {code: db[code]["cpi_series"] for code in unique_currencies}
-    missing_cpi = [code for code, series in cpi_series_needed.items() if not series]
-    if missing_cpi:
-        missing_list = ", ".join(sorted(missing_cpi))
+    still_missing = [code for code, series in cpi_series_needed.items() if not series]
+    if still_missing:
+        missing_list = ", ".join(sorted(still_missing))
         raise ValueError(
             "Không thể tự động xác định mã CPI cho các đồng tiền: "
             f"{missing_list}. Sử dụng tham số --cpi-series để chỉ định thủ công (ví dụ: GBP=GBRCPIALLMINMEI)."
