@@ -201,7 +201,26 @@ def infer_cpi_series_id(fred: Fred, code: str, overrides: Mapping[str, str]) -> 
     """Determine the CPI series id for a currency using overrides or FRED search."""
 
     manual_defaults = {
+        # United States
         "USD": "CPIAUCNS",
+        # United Kingdom
+        "GBP": "GBRCPIALLMINMEI",
+        # Japan
+        "JPY": "JPNCPIALLMINMEI",
+        # Euro Area (Eurostat harmonised index)
+        "EUR": "CP0000EZ19M086NEST",
+        # Australia
+        "AUD": "AUSCPIALLMINMEI",
+        # Canada
+        "CAD": "CPALTT01CAM661N",
+        # Switzerland
+        "CHF": "CP0000CHM086NEST",
+        # China
+        "CNY": "CHNCPIALLMINMEI",
+        # South Korea
+        "KRW": "KORCPIALLMINMEI",
+        # Singapore
+        "SGD": "SGPCPIALLMINMEI",
     }
 
     if code in overrides:
